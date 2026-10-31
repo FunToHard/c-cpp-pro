@@ -116,6 +116,76 @@ describe('CMake Static Include Extraction & IntelliSense Integration', () => {
       assert.ok(parsed.compileDefinitions.includes('ENABLE_LOGGING=1'));
     });
 
+    it('should propagate include directories and definitions across target_link_libraries transitively', () => {
+      const cmakeLists = path.join(tempDir, 'CMakeLists.txt');
+      const content = `
+        cmake_minimum_required(VERSION 3.24)
+        project(TransitiveApp CXX)
+
+        add_library(storage src/storage/store.cpp)
+        target_include_directories(storage PUBLIC src)
+        target_compile_definitions(storage PUBLIC HAS_STORAGE=1)
+
+        add_library(app src/application/app.cpp)
+        target_link_libraries(app PUBLIC storage)
+
+        add_executable(main src/main.cpp)
+        target_link_libraries(main PRIVATE app)
+      `;
+
+      fs.writeFileSync(cmakeLists, content, 'utf8');
+
+      const parsed = CMakeParser.parseWorkspace(tempDir);
+      assert.ok(parsed);
+
+      const normSrc = path.join(tempDir, 'src').replace(/\\/g, '/');
+      const appTarget = parsed.targets.find((t) => t.name === 'app');
+      assert.ok(appTarget);
+      assert.ok(appTarget.includeDirectories.includes(normSrc), 'app should inherit src from storage');
+      assert.ok(appTarget.compileDefinitions.includes('HAS_STORAGE=1'), 'app should inherit HAS_STORAGE=1');
+
+      const mainTarget = parsed.targets.find((t) => t.name === 'main');
+      assert.ok(mainTarget);
+      assert.ok(mainTarget.includeDirectories.includes(normSrc), 'main should transitively inherit src from storage');
+      assert.ok(mainTarget.compileDefinitions.includes('HAS_STORAGE=1'), 'main should transitively inherit HAS_STORAGE=1');
+    });
+
+    it('should not add ALIAS, IMPORTED, or non-source keywords as sources', () => {
+      const cmakeLists = path.join(tempDir, 'CMakeLists.txt');
+      const content = `
+        cmake_minimum_required(VERSION 3.24)
+        project(KeywordTest CXX)
+
+        add_library(real_lib STATIC real.cpp)
+        add_library(my_alias ALIAS real_lib)
+        add_library(ext_lib SHARED IMPORTED GLOBAL)
+        add_executable(app WIN32 MACOSX_BUNDLE main.cpp)
+        add_executable(app_alias ALIAS app)
+      `;
+
+      fs.writeFileSync(cmakeLists, content, 'utf8');
+
+      const parsed = CMakeParser.parseWorkspace(tempDir);
+      assert.ok(parsed);
+
+      const aliasLib = parsed.targets.find((t) => t.name === 'my_alias');
+      assert.ok(aliasLib);
+      assert.strictEqual(aliasLib.sourceFiles.length, 0);
+
+      const extLib = parsed.targets.find((t) => t.name === 'ext_lib');
+      assert.ok(extLib);
+      assert.strictEqual(extLib.sourceFiles.length, 0);
+
+      const app = parsed.targets.find((t) => t.name === 'app');
+      assert.ok(app);
+      assert.strictEqual(app.sourceFiles.length, 1);
+      assert.ok(app.sourceFiles[0].endsWith('main.cpp'));
+
+      const appAlias = parsed.targets.find((t) => t.name === 'app_alias');
+      assert.ok(appAlias);
+      assert.strictEqual(appAlias.sourceFiles.length, 0);
+    });
+
     it('should recursively parse subdirectories via add_subdirectory', () => {
       const rootCMake = path.join(tempDir, 'CMakeLists.txt');
       fs.writeFileSync(

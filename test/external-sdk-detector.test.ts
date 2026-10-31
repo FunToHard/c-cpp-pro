@@ -162,6 +162,69 @@ describe('External SDKs Auto-Discovery Subsystem', () => {
     });
   });
 
+  describe('Qt Detection', () => {
+    it('should detect Qt from QTDIR environment variable', () => {
+      const qtDir = path.join(tempDir, 'Qt6');
+      const incDir = path.join(qtDir, 'include');
+      const coreDir = path.join(incDir, 'QtCore');
+      fs.mkdirSync(coreDir, { recursive: true });
+      fs.writeFileSync(path.join(coreDir, 'qstring.h'), '// Qt QString Header');
+
+      const result = ExternalSdkDetector.detectQt({
+        env: { QTDIR: qtDir },
+        allowFsScan: false
+      });
+
+      assert.ok(result);
+      assert.strictEqual(result.name, 'Qt');
+      assert.ok(result.includePaths.includes(incDir));
+      assert.ok(result.includePaths.includes(coreDir));
+    });
+
+    it('should detect Qt from Qt6_DIR pointing to lib/cmake/Qt6', () => {
+      const qtPrefix = path.join(tempDir, 'Qt6Cmake');
+      const cmakeDir = path.join(qtPrefix, 'lib', 'cmake', 'Qt6');
+      const incDir = path.join(qtPrefix, 'include');
+      const guiDir = path.join(incDir, 'QtGui');
+      fs.mkdirSync(cmakeDir, { recursive: true });
+      fs.mkdirSync(guiDir, { recursive: true });
+      fs.writeFileSync(path.join(guiDir, 'qwindow.h'), '// Qt QWindow Header');
+
+      const result = ExternalSdkDetector.detectQt({
+        env: { Qt6_DIR: cmakeDir },
+        allowFsScan: false
+      });
+
+      assert.ok(result);
+      assert.strictEqual(result.name, 'Qt');
+      assert.ok(result.includePaths.includes(incDir));
+      assert.ok(result.includePaths.includes(guiDir));
+    });
+
+    it('should detect Qt from delimited CMAKE_PREFIX_PATH when non-Qt prefix precedes it', () => {
+      const otherPrefix = path.join(tempDir, 'OtherPrefix');
+      const otherInc = path.join(otherPrefix, 'include');
+      const qtPrefix = path.join(tempDir, 'QtPrefix');
+      const incDir = path.join(qtPrefix, 'include');
+      const coreDir = path.join(incDir, 'QtCore');
+      fs.mkdirSync(otherInc, { recursive: true });
+      fs.writeFileSync(path.join(otherInc, 'some_library.h'), '// Other lib');
+      fs.mkdirSync(coreDir, { recursive: true });
+      fs.writeFileSync(path.join(coreDir, 'qobject.h'), '// Qt QObject Header');
+
+      const prefixPath = [otherPrefix, qtPrefix].join(path.delimiter);
+      const result = ExternalSdkDetector.detectQt({
+        env: { CMAKE_PREFIX_PATH: prefixPath },
+        allowFsScan: false
+      });
+
+      assert.ok(result);
+      assert.strictEqual(result.name, 'Qt');
+      assert.strictEqual(result.rootPath, qtPrefix);
+      assert.ok(result.includePaths.includes(incDir));
+    });
+  });
+
   describe('getAllIncludePaths & Normalization', () => {
     it('should aggregate, de-duplicate, and normalize all detected SDK includes', () => {
       const vulkanDir = path.join(tempDir, 'VulkanSDK');

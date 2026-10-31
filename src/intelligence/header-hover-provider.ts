@@ -783,7 +783,8 @@ export function extractPathFromClangdHover(hover: vscode.Hover): string | undefi
 export function resolveLocalHeaderPath(
   rawPath: string,
   documentUri?: vscode.Uri,
-  hintPath?: string
+  hintPath?: string,
+  extraIncludeDirs?: string[]
 ): string | undefined {
   if (hintPath) {
     try {
@@ -795,24 +796,94 @@ export function resolveLocalHeaderPath(
     }
   }
 
+  if (!rawPath || rawPath.trim().length === 0) {
+    return undefined;
+  }
+
+  const normalizedRaw = rawPath.replace(/\\/g, '/').trim();
+
   if (documentUri) {
     try {
-      const docDir = path.dirname(documentUri.fsPath);
-      const relativeCandidate = path.resolve(docDir, rawPath);
+      const docPath = documentUri.fsPath;
+      const docDir = path.dirname(docPath);
+
+      // 1. Direct relative candidate from document directory
+      const relativeCandidate = path.resolve(docDir, normalizedRaw);
       if (fs.existsSync(relativeCandidate) && fs.statSync(relativeCandidate).isFile()) {
         return relativeCandidate;
       }
+
+      // 2. If the current directory ends with the first folder segment of rawPath
+      // (e.g. docDir is ".../src/application" and rawPath is "application/file.h", where
+      // the developer included "application/file.h" while inside "application/"):
+      const slashIdx = normalizedRaw.indexOf('/');
+      if (slashIdx !== -1) {
+        const firstSegment = normalizedRaw.substring(0, slashIdx);
+        const restOfPath = normalizedRaw.substring(slashIdx + 1);
+        const normDocDir = docDir.replace(/\\/g, '/');
+        if (
+          normDocDir.endsWith('/' + firstSegment) ||
+          path.basename(docDir).toLowerCase() === firstSegment.toLowerCase()
+        ) {
+          const strippedCandidate = path.resolve(docDir, restOfPath);
+          if (fs.existsSync(strippedCandidate) && fs.statSync(strippedCandidate).isFile()) {
+            return strippedCandidate;
+          }
+        }
+      }
+
+      // 3. Walk up parent directories from docDir (up to 8 levels or workspace root boundary)
+      let currentDir = docDir;
+      let levels = 0;
+      const wsFolder = vscode.workspace.getWorkspaceFolder ? vscode.workspace.getWorkspaceFolder(documentUri) : undefined;
+      const wsRoot = wsFolder?.uri.fsPath;
+      while (currentDir && levels < 8) {
+        const candidates = [
+          path.resolve(currentDir, normalizedRaw),
+          path.resolve(currentDir, 'src', normalizedRaw),
+          path.resolve(currentDir, 'include', normalizedRaw),
+          path.resolve(currentDir, 'inc', normalizedRaw)
+        ];
+        for (const cand of candidates) {
+          if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+            return cand;
+          }
+        }
+        if (wsRoot && path.normalize(currentDir) === path.normalize(wsRoot)) {
+          break;
+        }
+        const parent = path.dirname(currentDir);
+        if (parent === currentDir) break;
+        currentDir = parent;
+        levels++;
+      }
     } catch {
-      // Ignore
+      // Ignore filesystem errors
     }
   }
 
+  // 4. Extra include directories (e.g. from CMake, solution, or flags)
+  if (extraIncludeDirs && extraIncludeDirs.length > 0) {
+    for (const incDir of extraIncludeDirs) {
+      try {
+        const candidate = path.resolve(incDir, normalizedRaw);
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+          return candidate;
+        }
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  // 5. Workspace folder roots
   if (vscode.workspace.workspaceFolders) {
     for (const folder of vscode.workspace.workspaceFolders) {
       const candidates = [
-        path.resolve(folder.uri.fsPath, rawPath),
-        path.resolve(folder.uri.fsPath, 'include', rawPath),
-        path.resolve(folder.uri.fsPath, 'src', rawPath)
+        path.resolve(folder.uri.fsPath, normalizedRaw),
+        path.resolve(folder.uri.fsPath, 'src', normalizedRaw),
+        path.resolve(folder.uri.fsPath, 'include', normalizedRaw),
+        path.resolve(folder.uri.fsPath, 'inc', normalizedRaw)
       ];
       for (const candidate of candidates) {
         try {

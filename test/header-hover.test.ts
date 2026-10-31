@@ -14,6 +14,7 @@ import {
   formatLocalHeaderHover
 } from '../src/intelligence/header-hover-provider';
 import { createClangdMiddleware } from '../src/substrate/protocol-filter';
+import { CppIncludeDocumentLinkProvider } from '../src/intelligence/document-links';
 import { mockVscode } from './vscode-mock';
 
 describe('Header Include Rich Hover Provider', () => {
@@ -170,6 +171,18 @@ void renderMesh(const Shape3D& shape, ColorMode mode);
       const docUri = vscode.Uri.file(path.join(tempDir, 'main.cpp'));
       const resolved = resolveLocalHeaderPath('non_existent_file_xyz.h', docUri);
       assert.strictEqual(resolved, undefined);
+    });
+
+    it('should resolve application/file.h when document is inside application directory', () => {
+      const appDir = path.join(tempDir, 'src', 'application');
+      fs.mkdirSync(appDir, { recursive: true });
+      const targetHeader = path.join(appDir, 'Editing.h');
+      fs.writeFileSync(targetHeader, '// Header content', 'utf8');
+
+      const docUri = vscode.Uri.file(path.join(appDir, 'Editing.cpp'));
+      const resolved = resolveLocalHeaderPath('application/Editing.h', docUri);
+      assert.ok(resolved);
+      assert.strictEqual(path.normalize(resolved), path.normalize(targetHeader));
     });
   });
 
@@ -514,6 +527,74 @@ void renderMesh(const Shape3D& shape, ColorMode mode);
       const md = (result.contents as any).value || (result.contents[0] as any).value;
       assert.ok(md.includes('computeAnswer'));
       assert.ok(!md.includes('C++ Standard Library'));
+    });
+
+    it('should fallback to local header file location when language server definition returns empty', async () => {
+      const middleware = createClangdMiddleware();
+      assert.ok(middleware.provideDefinition);
+
+      const tempAppDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-def-test-'));
+      const appDir = path.join(tempAppDir, 'src', 'application');
+      fs.mkdirSync(appDir, { recursive: true });
+      const targetHeader = path.join(appDir, 'Editing.h');
+      fs.writeFileSync(targetHeader, '#pragma once\n', 'utf8');
+
+      const mockDoc: any = {
+        lineAt: (_line: number) => ({ text: '#include "application/Editing.h"' }),
+        uri: vscode.Uri.file(path.join(appDir, 'Editing.cpp'))
+      };
+      const mockPos = new mockVscode.Position(0, 15);
+      const mockToken = {} as any;
+
+      // Mock next returning null/empty
+      const mockNext = async () => null;
+
+      const result = (await middleware.provideDefinition!(
+        mockDoc,
+        mockPos,
+        mockToken,
+        mockNext
+      )) as vscode.Location;
+
+      assert.ok(result);
+      assert.strictEqual(path.normalize(result.uri.fsPath), path.normalize(targetHeader));
+      assert.strictEqual(result.range.start.line, 0);
+
+      try {
+        fs.rmSync(tempAppDir, { recursive: true, force: true });
+      } catch {
+        // Ignore
+      }
+    });
+
+    it('should extract document links for resolved local header includes', () => {
+      const tempAppDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-doclink-test-'));
+      const appDir = path.join(tempAppDir, 'src', 'application');
+      fs.mkdirSync(appDir, { recursive: true });
+      const targetHeader = path.join(appDir, 'Editing.h');
+      fs.writeFileSync(targetHeader, '#pragma once\n', 'utf8');
+
+      const docUri = vscode.Uri.file(path.join(appDir, 'Editing.cpp'));
+      const mockDoc: any = {
+        lineCount: 2,
+        lineAt: (i: number) => ({
+          text: i === 0 ? '#include "application/Editing.h"' : 'int x = 0;'
+        }),
+        uri: docUri
+      };
+
+      const provider = new CppIncludeDocumentLinkProvider();
+      const links = provider.provideDocumentLinks(mockDoc, {} as any);
+
+      assert.strictEqual(links.length, 1);
+      assert.ok(links[0].target);
+      assert.strictEqual(path.normalize(links[0].target.fsPath), path.normalize(targetHeader));
+
+      try {
+        fs.rmSync(tempAppDir, { recursive: true, force: true });
+      } catch {
+        // Ignore
+      }
     });
   });
 });

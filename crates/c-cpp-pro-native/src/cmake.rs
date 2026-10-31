@@ -14,11 +14,13 @@ pub struct CMakeRawCommand {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CMakeTargetInfoNative {
     pub name: String,
+    #[napi(js_name = "type")]
     #[serde(rename = "type")]
     pub target_type: String, // "executable" | "library" | "interface" | "custom"
     pub source_files: Vec<String>,
     pub include_directories: Vec<String>,
     pub compile_definitions: Vec<String>,
+    pub linked_targets: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -273,7 +275,7 @@ pub fn parse_cmake_file_internal(
     };
 
     let p = Path::new(file_path);
-    let current_dir = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+    let current_dir = normalize_slash(&p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default());
 
     let mut variables = inherited_variables.clone();
     if !variables.contains_key("CMAKE_CURRENT_SOURCE_DIR") {
@@ -342,10 +344,23 @@ pub fn parse_cmake_file_internal(
                     let target_idx = get_or_create_target(target_name, "executable", &mut result.targets);
                     result.targets[target_idx].target_type = "executable".to_string();
 
-                    for s in &cmd.args[1..] {
-                        let res = resolve_variables(s, &variables);
-                        let full = resolve_path(&current_dir, &res);
-                        result.targets[target_idx].source_files.push(full);
+                    let is_alias_or_imported = cmd.args[1..].iter().any(|arg| {
+                        let upper = arg.to_uppercase();
+                        upper == "ALIAS" || upper == "IMPORTED"
+                    });
+                    if !is_alias_or_imported {
+                        for s in &cmd.args[1..] {
+                            let upper = s.to_uppercase();
+                            if matches!(
+                                upper.as_str(),
+                                "WIN32" | "MACOSX_BUNDLE" | "EXCLUDE_FROM_ALL" | "ALIAS" | "IMPORTED" | "GLOBAL"
+                            ) {
+                                continue;
+                            }
+                            let res = resolve_variables(s, &variables);
+                            let full = resolve_path(&current_dir, &res);
+                            result.targets[target_idx].source_files.push(full);
+                        }
                     }
                 }
             }
@@ -368,10 +383,36 @@ pub fn parse_cmake_file_internal(
                     let target_idx = get_or_create_target(target_name, &target_type, &mut result.targets);
                     result.targets[target_idx].target_type = target_type;
 
-                    for s in &cmd.args[src_start..] {
-                        let res = resolve_variables(s, &variables);
-                        let full = resolve_path(&current_dir, &res);
-                        result.targets[target_idx].source_files.push(full);
+                    let is_alias_or_imported = cmd.args[1..].iter().any(|arg| {
+                        let upper = arg.to_uppercase();
+                        upper == "ALIAS" || upper == "IMPORTED"
+                    });
+                    if is_alias_or_imported {
+                        if cmd.args[1..].iter().any(|arg| arg.to_uppercase() == "INTERFACE") {
+                            result.targets[target_idx].target_type = "interface".to_string();
+                        }
+                    } else {
+                        for s in &cmd.args[src_start..] {
+                            let upper = s.to_uppercase();
+                            if matches!(
+                                upper.as_str(),
+                                "STATIC"
+                                    | "SHARED"
+                                    | "MODULE"
+                                    | "OBJECT"
+                                    | "INTERFACE"
+                                    | "UNKNOWN"
+                                    | "IMPORTED"
+                                    | "ALIAS"
+                                    | "GLOBAL"
+                                    | "EXCLUDE_FROM_ALL"
+                            ) {
+                                continue;
+                            }
+                            let res = resolve_variables(s, &variables);
+                            let full = resolve_path(&current_dir, &res);
+                            result.targets[target_idx].source_files.push(full);
+                        }
                     }
                 }
             }
@@ -387,6 +428,35 @@ pub fn parse_cmake_file_internal(
                         let res = resolve_variables(s, &variables);
                         let full = resolve_path(&current_dir, &res);
                         result.targets[target_idx].source_files.push(full);
+                    }
+                }
+            }
+            "target_link_libraries" => {
+                if cmd.args.len() >= 2 {
+                    let target_name = &cmd.args[0];
+                    let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
+                    for arg in &cmd.args[1..] {
+                        let res = resolve_variables(arg, &variables).trim().to_string();
+                        let upper = res.to_uppercase();
+                        if matches!(
+                            upper.as_str(),
+                            "PUBLIC"
+                                | "PRIVATE"
+                                | "INTERFACE"
+                                | "LINK_PUBLIC"
+                                | "LINK_PRIVATE"
+                                | "DEBUG"
+                                | "OPTIMIZED"
+                                | "GENERAL"
+                        ) {
+                            continue;
+                        }
+                        if !res.is_empty() {
+                            let list = result.targets[target_idx].linked_targets.get_or_insert_with(Vec::new);
+                            if !list.contains(&res) {
+                                list.push(res);
+                            }
+                        }
                     }
                 }
             }
@@ -424,7 +494,34 @@ pub fn parse_cmake_file_internal(
                             }
                         }
                         for sub_t in sub_parsed.targets {
-                            if !result.targets.iter().any(|t| t.name == sub_t.name) {
+                            if let Some(existing) = result.targets.iter_mut().find(|t| t.name == sub_t.name) {
+                                if existing.target_type == "custom" && sub_t.target_type != "custom" {
+                                    existing.target_type = sub_t.target_type;
+                                }
+                                for s in sub_t.source_files {
+                                    if !existing.source_files.contains(&s) {
+                                        existing.source_files.push(s);
+                                    }
+                                }
+                                for inc in sub_t.include_directories {
+                                    if !existing.include_directories.contains(&inc) {
+                                        existing.include_directories.push(inc);
+                                    }
+                                }
+                                for def in sub_t.compile_definitions {
+                                    if !existing.compile_definitions.contains(&def) {
+                                        existing.compile_definitions.push(def);
+                                    }
+                                }
+                                if let Some(sub_linked) = sub_t.linked_targets {
+                                    let list = existing.linked_targets.get_or_insert_with(Vec::new);
+                                    for lt in sub_linked {
+                                        if !list.contains(&lt) {
+                                            list.push(lt);
+                                        }
+                                    }
+                                }
+                            } else {
                                 result.targets.push(sub_t);
                             }
                         }
@@ -473,7 +570,58 @@ pub fn parse_cmake_file_internal(
         }
     }
 
+    resolve_linked_target_properties(
+        &mut result.targets,
+        &mut result.include_directories,
+        &mut result.compile_definitions,
+    );
+
     result
+}
+
+pub fn resolve_linked_target_properties(
+    targets: &mut Vec<CMakeTargetInfoNative>,
+    global_includes: &mut Vec<String>,
+    global_defs: &mut Vec<String>,
+) {
+    let mut changed = true;
+    let mut passes = 0;
+    while changed && passes < 20 {
+        changed = false;
+        passes += 1;
+        let n = targets.len();
+        for i in 0..n {
+            let deps = match &targets[i].linked_targets {
+                Some(d) => d.clone(),
+                None => continue,
+            };
+            for dep_name in deps {
+                if let Some(dep_idx) = targets.iter().position(|t| &t.name == &dep_name) {
+                    let dep_incs = targets[dep_idx].include_directories.clone();
+                    let dep_defs = targets[dep_idx].compile_definitions.clone();
+
+                    for inc in dep_incs {
+                        if !targets[i].include_directories.contains(&inc) {
+                            targets[i].include_directories.push(inc.clone());
+                            if !global_includes.contains(&inc) {
+                                global_includes.push(inc);
+                            }
+                            changed = true;
+                        }
+                    }
+                    for def in dep_defs {
+                        if !targets[i].compile_definitions.contains(&def) {
+                            targets[i].compile_definitions.push(def.clone());
+                            if !global_defs.contains(&def) {
+                                global_defs.push(def);
+                            }
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn get_or_create_target(target_name: &str, default_type: &str, targets: &mut Vec<CMakeTargetInfoNative>) -> usize {
@@ -486,6 +634,7 @@ fn get_or_create_target(target_name: &str, default_type: &str, targets: &mut Vec
             source_files: Vec::new(),
             include_directories: Vec::new(),
             compile_definitions: Vec::new(),
+            linked_targets: Some(Vec::new()),
         });
         targets.len() - 1
     }
@@ -653,10 +802,23 @@ pub fn parse_cmake_content_native(
                     let target_idx = get_or_create_target(target_name, "executable", &mut result.targets);
                     result.targets[target_idx].target_type = "executable".to_string();
 
-                    for s in &cmd.args[1..] {
-                        let res = resolve_variables(s, &variables);
-                        let full = resolve_path(&current_dir, &res);
-                        result.targets[target_idx].source_files.push(full);
+                    let is_alias_or_imported = cmd.args[1..].iter().any(|arg| {
+                        let upper = arg.to_uppercase();
+                        upper == "ALIAS" || upper == "IMPORTED"
+                    });
+                    if !is_alias_or_imported {
+                        for s in &cmd.args[1..] {
+                            let upper = s.to_uppercase();
+                            if matches!(
+                                upper.as_str(),
+                                "WIN32" | "MACOSX_BUNDLE" | "EXCLUDE_FROM_ALL" | "ALIAS" | "IMPORTED" | "GLOBAL"
+                            ) {
+                                continue;
+                            }
+                            let res = resolve_variables(s, &variables);
+                            let full = resolve_path(&current_dir, &res);
+                            result.targets[target_idx].source_files.push(full);
+                        }
                     }
                 }
             }
@@ -679,10 +841,36 @@ pub fn parse_cmake_content_native(
                     let target_idx = get_or_create_target(target_name, &target_type, &mut result.targets);
                     result.targets[target_idx].target_type = target_type;
 
-                    for s in &cmd.args[src_start..] {
-                        let res = resolve_variables(s, &variables);
-                        let full = resolve_path(&current_dir, &res);
-                        result.targets[target_idx].source_files.push(full);
+                    let is_alias_or_imported = cmd.args[1..].iter().any(|arg| {
+                        let upper = arg.to_uppercase();
+                        upper == "ALIAS" || upper == "IMPORTED"
+                    });
+                    if is_alias_or_imported {
+                        if cmd.args[1..].iter().any(|arg| arg.to_uppercase() == "INTERFACE") {
+                            result.targets[target_idx].target_type = "interface".to_string();
+                        }
+                    } else {
+                        for s in &cmd.args[src_start..] {
+                            let upper = s.to_uppercase();
+                            if matches!(
+                                upper.as_str(),
+                                "STATIC"
+                                    | "SHARED"
+                                    | "MODULE"
+                                    | "OBJECT"
+                                    | "INTERFACE"
+                                    | "UNKNOWN"
+                                    | "IMPORTED"
+                                    | "ALIAS"
+                                    | "GLOBAL"
+                                    | "EXCLUDE_FROM_ALL"
+                            ) {
+                                continue;
+                            }
+                            let res = resolve_variables(s, &variables);
+                            let full = resolve_path(&current_dir, &res);
+                            result.targets[target_idx].source_files.push(full);
+                        }
                     }
                 }
             }
@@ -701,9 +889,44 @@ pub fn parse_cmake_content_native(
                     }
                 }
             }
+            "target_link_libraries" => {
+                if cmd.args.len() >= 2 {
+                    let target_name = &cmd.args[0];
+                    let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
+                    for arg in &cmd.args[1..] {
+                        let res = resolve_variables(arg, &variables).trim().to_string();
+                        let upper = res.to_uppercase();
+                        if matches!(
+                            upper.as_str(),
+                            "PUBLIC"
+                                | "PRIVATE"
+                                | "INTERFACE"
+                                | "LINK_PUBLIC"
+                                | "LINK_PRIVATE"
+                                | "DEBUG"
+                                | "OPTIMIZED"
+                                | "GENERAL"
+                        ) {
+                            continue;
+                        }
+                        if !res.is_empty() {
+                            let list = result.targets[target_idx].linked_targets.get_or_insert_with(Vec::new);
+                            if !list.contains(&res) {
+                                list.push(res);
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
+
+    resolve_linked_target_properties(
+        &mut result.targets,
+        &mut result.include_directories,
+        &mut result.compile_definitions,
+    );
 
     Ok(CMakeProjectInfoNative {
         workspace_root,
@@ -728,7 +951,13 @@ pub fn parse_cmake_workspace_native(workspace_root: String) -> Result<Option<CMa
 
     let mut visited = HashSet::new();
     let variables = HashMap::new();
-    let parsed = parse_cmake_file_internal(&root_cmake, &workspace_root, &variables, &mut visited);
+    let mut parsed = parse_cmake_file_internal(&root_cmake, &workspace_root, &variables, &mut visited);
+
+    resolve_linked_target_properties(
+        &mut parsed.targets,
+        &mut parsed.include_directories,
+        &mut parsed.compile_definitions,
+    );
 
     Ok(Some(CMakeProjectInfoNative {
         workspace_root: workspace_root.clone(),

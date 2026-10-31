@@ -4,6 +4,7 @@ import { HoverTransformer } from '../intelligence/hover-transformer';
 import {
   HeaderHoverProvider,
   parseIncludeLine,
+  resolveLocalHeaderPath,
   extractPathFromClangdHover
 } from '../intelligence/header-hover-provider';
 import { prioritizeDefinitionLocations } from '../intelligence/smart-definition';
@@ -341,10 +342,32 @@ export function createClangdMiddleware(
       ) => vscode.ProviderResult<vscode.Definition | vscode.LocationLink[]>
     ): Promise<vscode.Definition | vscode.LocationLink[] | null | undefined> => {
       const defs = await next(document, position, token);
-      if (!defs) {
-        return defs;
+      if (defs && (!Array.isArray(defs) || defs.length > 0)) {
+        return prioritizeDefinitionLocations(defs as any);
       }
-      return prioritizeDefinitionLocations(defs as any);
+
+      if (token.isCancellationRequested) {
+        return null;
+      }
+
+      // Fallback: If cursor is on an include directive, resolve the header file directly on disk
+      try {
+        const lineText = document.lineAt(position.line).text;
+        const includeInfo = parseIncludeLine(lineText, position.line, position.character);
+        if (includeInfo) {
+          const resolved = resolveLocalHeaderPath(includeInfo.headerName, document.uri);
+          if (resolved) {
+            return new vscode.Location(
+              vscode.Uri.file(resolved),
+              new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0))
+            );
+          }
+        }
+      } catch {
+        // Ignore fallback errors
+      }
+
+      return defs;
     }
   };
 }

@@ -139,7 +139,7 @@ export class CMakeParser {
    */
   public static parseFile(
     filePath: string,
-    workspaceRoot: string,
+    workspaceRoot?: string,
     inheritedVariables: Map<string, string> = new Map(),
     visitedFiles: Set<string> = new Set()
   ): {
@@ -188,6 +188,7 @@ export class CMakeParser {
     }
 
     const currentDir = path.dirname(normalizedFilePath);
+    const rootDir = workspaceRoot || currentDir;
     const variables = new Map<string, string>(inheritedVariables);
 
     // Built-in CMake directory variables
@@ -195,9 +196,9 @@ export class CMakeParser {
       variables.set('CMAKE_CURRENT_SOURCE_DIR', currentDir);
     }
     variables.set('CMAKE_CURRENT_LIST_DIR', currentDir);
-    variables.set('PROJECT_SOURCE_DIR', workspaceRoot);
-    variables.set('CMAKE_SOURCE_DIR', workspaceRoot);
-    variables.set('workspaceFolder', workspaceRoot);
+    variables.set('PROJECT_SOURCE_DIR', rootDir);
+    variables.set('CMAKE_SOURCE_DIR', rootDir);
+    variables.set('workspaceFolder', rootDir);
 
     const resolveVariables = (str: string): string => {
       let resolved = str;
@@ -363,10 +364,27 @@ export class CMakeParser {
         case 'add_executable': {
           if (cmd.args.length >= 1) {
             const targetName = cmd.args[0];
-            const sources = cmd.args.slice(1).map((s) => {
-              const res = resolveVariables(s);
-              return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
+            const isAliasOrImported = cmd.args.slice(1).some((s) => {
+              const u = s.toUpperCase();
+              return u === 'ALIAS' || u === 'IMPORTED';
             });
+            const nonSourceKeywords = new Set([
+              'WIN32',
+              'MACOSX_BUNDLE',
+              'EXCLUDE_FROM_ALL',
+              'ALIAS',
+              'IMPORTED',
+              'GLOBAL'
+            ]);
+            const sources = isAliasOrImported
+              ? []
+              : cmd.args
+                  .slice(1)
+                  .filter((s) => !nonSourceKeywords.has(s.toUpperCase()))
+                  .map((s) => {
+                    const res = resolveVariables(s);
+                    return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
+                  });
 
             let target = result.targets.find((t) => t.name === targetName);
             if (!target) {
@@ -402,10 +420,35 @@ export class CMakeParser {
               }
             }
 
-            const sources = cmd.args.slice(srcStart).map((s) => {
-              const res = resolveVariables(s);
-              return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
+            const isAliasOrImported = cmd.args.slice(1).some((s) => {
+              const u = s.toUpperCase();
+              return u === 'ALIAS' || u === 'IMPORTED';
             });
+            if (isAliasOrImported && cmd.args.slice(1).some((s) => s.toUpperCase() === 'INTERFACE')) {
+              type = 'interface';
+            }
+
+            const nonSourceKeywords = new Set([
+              'STATIC',
+              'SHARED',
+              'MODULE',
+              'OBJECT',
+              'INTERFACE',
+              'UNKNOWN',
+              'IMPORTED',
+              'ALIAS',
+              'GLOBAL',
+              'EXCLUDE_FROM_ALL'
+            ]);
+            const sources = isAliasOrImported
+              ? []
+              : cmd.args
+                  .slice(srcStart)
+                  .filter((s) => !nonSourceKeywords.has(s.toUpperCase()))
+                  .map((s) => {
+                    const res = resolveVariables(s);
+                    return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
+                  });
 
             let target = result.targets.find((t) => t.name === targetName);
             if (!target) {
@@ -447,6 +490,49 @@ export class CMakeParser {
                 return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
               });
             target.sourceFiles.push(...sources);
+          }
+          break;
+        }
+
+        case 'target_link_libraries': {
+          if (cmd.args.length >= 2) {
+            const targetName = cmd.args[0];
+            let target = result.targets.find((t) => t.name === targetName);
+            if (!target) {
+              target = {
+                name: targetName,
+                type: 'custom',
+                sourceFiles: [],
+                includeDirectories: [],
+                compileDefinitions: [],
+                linkedTargets: []
+              };
+              result.targets.push(target);
+            }
+            if (!target.linkedTargets) {
+              target.linkedTargets = [];
+            }
+            for (let k = 1; k < cmd.args.length; k++) {
+              const raw = resolveVariables(cmd.args[k]).trim();
+              const upper = raw.toUpperCase();
+              if (
+                [
+                  'PUBLIC',
+                  'PRIVATE',
+                  'INTERFACE',
+                  'LINK_PUBLIC',
+                  'LINK_PRIVATE',
+                  'DEBUG',
+                  'OPTIMIZED',
+                  'GENERAL'
+                ].includes(upper)
+              ) {
+                continue;
+              }
+              if (raw && !target.linkedTargets.includes(raw)) {
+                target.linkedTargets.push(raw);
+              }
+            }
           }
           break;
         }
@@ -498,6 +584,25 @@ export class CMakeParser {
                 const existing = result.targets.find((t) => t.name === subTarget.name);
                 if (!existing) {
                   result.targets.push(subTarget);
+                } else {
+                  if (existing.type === 'custom' && subTarget.type !== 'custom') {
+                    existing.type = subTarget.type;
+                  }
+                  for (const s of subTarget.sourceFiles) {
+                    if (!existing.sourceFiles.includes(s)) existing.sourceFiles.push(s);
+                  }
+                  for (const inc of subTarget.includeDirectories) {
+                    if (!existing.includeDirectories.includes(inc)) existing.includeDirectories.push(inc);
+                  }
+                  for (const def of subTarget.compileDefinitions) {
+                    if (!existing.compileDefinitions.includes(def)) existing.compileDefinitions.push(def);
+                  }
+                  if (subTarget.linkedTargets) {
+                    existing.linkedTargets = existing.linkedTargets ?? [];
+                    for (const lt of subTarget.linkedTargets) {
+                      if (!existing.linkedTargets.includes(lt)) existing.linkedTargets.push(lt);
+                    }
+                  }
                 }
               }
             }
@@ -511,15 +616,15 @@ export class CMakeParser {
             const candidates = [
               path.isAbsolute(fileArg) ? fileArg : path.resolve(currentDir, fileArg),
               path.isAbsolute(fileArg) ? fileArg : path.resolve(currentDir, `${fileArg}.cmake`),
-              path.resolve(workspaceRoot, 'cmake', fileArg),
-              path.resolve(workspaceRoot, 'cmake', `${fileArg}.cmake`)
+              path.resolve(rootDir, 'cmake', fileArg),
+              path.resolve(rootDir, 'cmake', `${fileArg}.cmake`)
             ];
 
             for (const cand of candidates) {
               if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
                 const incParsed = CMakeParser.parseFile(
                   cand,
-                  workspaceRoot,
+                  rootDir,
                   variables,
                   visitedFiles
                 );
@@ -556,7 +661,70 @@ export class CMakeParser {
       }
     }
 
+    CMakeParser.resolveLinkedTargetProperties(
+      result.targets,
+      result.includeDirectories,
+      result.compileDefinitions
+    );
+
     return result;
+  }
+
+  /**
+   * Transitively propagates include directories and compile definitions across linked targets.
+   */
+  public static resolveLinkedTargetProperties(
+    projectOrTargets: CMakeTargetInfo[] | { targets: CMakeTargetInfo[]; includeDirectories?: string[]; compileDefinitions?: string[] },
+    globalIncludes?: string[],
+    globalDefs?: string[]
+  ): void {
+    let targets: CMakeTargetInfo[];
+    let incs = globalIncludes;
+    let defs = globalDefs;
+    if (Array.isArray(projectOrTargets)) {
+      targets = projectOrTargets;
+    } else {
+      targets = projectOrTargets.targets;
+      incs = incs ?? projectOrTargets.includeDirectories;
+      defs = defs ?? projectOrTargets.compileDefinitions;
+    }
+    if (!targets) return;
+
+    let changed = true;
+    let passes = 0;
+    while (changed && passes < 20) {
+      changed = false;
+      passes++;
+      for (const target of targets) {
+        if (!target.linkedTargets || target.linkedTargets.length === 0) {
+          continue;
+        }
+        for (const depName of target.linkedTargets) {
+          const depTarget = targets.find((t) => t.name === depName);
+          if (!depTarget) continue;
+
+          for (const inc of depTarget.includeDirectories) {
+            if (!target.includeDirectories.includes(inc)) {
+              target.includeDirectories.push(inc);
+              if (incs && !incs.includes(inc)) {
+                incs.push(inc);
+              }
+              changed = true;
+            }
+          }
+
+          for (const def of depTarget.compileDefinitions) {
+            if (!target.compileDefinitions.includes(def)) {
+              target.compileDefinitions.push(def);
+              if (defs && !defs.includes(def)) {
+                defs.push(def);
+              }
+              changed = true;
+            }
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -572,6 +740,12 @@ export class CMakeParser {
     }
 
     const parsed = CMakeParser.parseFile(rootCMake, workspaceRoot);
+
+    CMakeParser.resolveLinkedTargetProperties(
+      parsed.targets,
+      parsed.includeDirectories,
+      parsed.compileDefinitions
+    );
 
     return {
       workspaceRoot,
