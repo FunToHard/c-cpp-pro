@@ -201,12 +201,14 @@ describe('External SDKs Auto-Discovery Subsystem', () => {
       assert.ok(result.includePaths.includes(guiDir));
     });
 
-    it('should detect Qt from delimited CMAKE_PREFIX_PATH', () => {
+    it('should detect Qt from delimited CMAKE_PREFIX_PATH when non-Qt prefix precedes it', () => {
       const otherPrefix = path.join(tempDir, 'OtherPrefix');
+      const otherInc = path.join(otherPrefix, 'include');
       const qtPrefix = path.join(tempDir, 'QtPrefix');
       const incDir = path.join(qtPrefix, 'include');
       const coreDir = path.join(incDir, 'QtCore');
-      fs.mkdirSync(otherPrefix, { recursive: true });
+      fs.mkdirSync(otherInc, { recursive: true });
+      fs.writeFileSync(path.join(otherInc, 'some_library.h'), '// Other lib');
       fs.mkdirSync(coreDir, { recursive: true });
       fs.writeFileSync(path.join(coreDir, 'qobject.h'), '// Qt QObject Header');
 
@@ -218,6 +220,7 @@ describe('External SDKs Auto-Discovery Subsystem', () => {
 
       assert.ok(result);
       assert.strictEqual(result.name, 'Qt');
+      assert.strictEqual(result.rootPath, qtPrefix);
       assert.ok(result.includePaths.includes(incDir));
     });
   });

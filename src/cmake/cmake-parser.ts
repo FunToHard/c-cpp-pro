@@ -364,10 +364,27 @@ export class CMakeParser {
         case 'add_executable': {
           if (cmd.args.length >= 1) {
             const targetName = cmd.args[0];
-            const sources = cmd.args.slice(1).map((s) => {
-              const res = resolveVariables(s);
-              return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
+            const isAliasOrImported = cmd.args.slice(1).some((s) => {
+              const u = s.toUpperCase();
+              return u === 'ALIAS' || u === 'IMPORTED';
             });
+            const nonSourceKeywords = new Set([
+              'WIN32',
+              'MACOSX_BUNDLE',
+              'EXCLUDE_FROM_ALL',
+              'ALIAS',
+              'IMPORTED',
+              'GLOBAL'
+            ]);
+            const sources = isAliasOrImported
+              ? []
+              : cmd.args
+                  .slice(1)
+                  .filter((s) => !nonSourceKeywords.has(s.toUpperCase()))
+                  .map((s) => {
+                    const res = resolveVariables(s);
+                    return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
+                  });
 
             let target = result.targets.find((t) => t.name === targetName);
             if (!target) {
@@ -403,10 +420,35 @@ export class CMakeParser {
               }
             }
 
-            const sources = cmd.args.slice(srcStart).map((s) => {
-              const res = resolveVariables(s);
-              return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
+            const isAliasOrImported = cmd.args.slice(1).some((s) => {
+              const u = s.toUpperCase();
+              return u === 'ALIAS' || u === 'IMPORTED';
             });
+            if (isAliasOrImported && cmd.args.slice(1).some((s) => s.toUpperCase() === 'INTERFACE')) {
+              type = 'interface';
+            }
+
+            const nonSourceKeywords = new Set([
+              'STATIC',
+              'SHARED',
+              'MODULE',
+              'OBJECT',
+              'INTERFACE',
+              'UNKNOWN',
+              'IMPORTED',
+              'ALIAS',
+              'GLOBAL',
+              'EXCLUDE_FROM_ALL'
+            ]);
+            const sources = isAliasOrImported
+              ? []
+              : cmd.args
+                  .slice(srcStart)
+                  .filter((s) => !nonSourceKeywords.has(s.toUpperCase()))
+                  .map((s) => {
+                    const res = resolveVariables(s);
+                    return path.isAbsolute(res) ? res : path.resolve(currentDir, res);
+                  });
 
             let target = result.targets.find((t) => t.name === targetName);
             if (!target) {

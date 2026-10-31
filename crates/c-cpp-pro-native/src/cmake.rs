@@ -344,14 +344,23 @@ pub fn parse_cmake_file_internal(
                     let target_idx = get_or_create_target(target_name, "executable", &mut result.targets);
                     result.targets[target_idx].target_type = "executable".to_string();
 
-                    for s in &cmd.args[1..] {
-                        let upper = s.to_uppercase();
-                        if matches!(upper.as_str(), "WIN32" | "MACOSX_BUNDLE" | "EXCLUDE_FROM_ALL" | "ALIAS") {
-                            continue;
+                    let is_alias_or_imported = cmd.args[1..].iter().any(|arg| {
+                        let upper = arg.to_uppercase();
+                        upper == "ALIAS" || upper == "IMPORTED"
+                    });
+                    if !is_alias_or_imported {
+                        for s in &cmd.args[1..] {
+                            let upper = s.to_uppercase();
+                            if matches!(
+                                upper.as_str(),
+                                "WIN32" | "MACOSX_BUNDLE" | "EXCLUDE_FROM_ALL" | "ALIAS" | "IMPORTED" | "GLOBAL"
+                            ) {
+                                continue;
+                            }
+                            let res = resolve_variables(s, &variables);
+                            let full = resolve_path(&current_dir, &res);
+                            result.targets[target_idx].source_files.push(full);
                         }
-                        let res = resolve_variables(s, &variables);
-                        let full = resolve_path(&current_dir, &res);
-                        result.targets[target_idx].source_files.push(full);
                     }
                 }
             }
@@ -374,14 +383,36 @@ pub fn parse_cmake_file_internal(
                     let target_idx = get_or_create_target(target_name, &target_type, &mut result.targets);
                     result.targets[target_idx].target_type = target_type;
 
-                    for s in &cmd.args[src_start..] {
-                        let upper = s.to_uppercase();
-                        if matches!(upper.as_str(), "EXCLUDE_FROM_ALL" | "ALIAS" | "UNKNOWN") {
-                            continue;
+                    let is_alias_or_imported = cmd.args[1..].iter().any(|arg| {
+                        let upper = arg.to_uppercase();
+                        upper == "ALIAS" || upper == "IMPORTED"
+                    });
+                    if is_alias_or_imported {
+                        if cmd.args[1..].iter().any(|arg| arg.to_uppercase() == "INTERFACE") {
+                            result.targets[target_idx].target_type = "interface".to_string();
                         }
-                        let res = resolve_variables(s, &variables);
-                        let full = resolve_path(&current_dir, &res);
-                        result.targets[target_idx].source_files.push(full);
+                    } else {
+                        for s in &cmd.args[src_start..] {
+                            let upper = s.to_uppercase();
+                            if matches!(
+                                upper.as_str(),
+                                "STATIC"
+                                    | "SHARED"
+                                    | "MODULE"
+                                    | "OBJECT"
+                                    | "INTERFACE"
+                                    | "UNKNOWN"
+                                    | "IMPORTED"
+                                    | "ALIAS"
+                                    | "GLOBAL"
+                                    | "EXCLUDE_FROM_ALL"
+                            ) {
+                                continue;
+                            }
+                            let res = resolve_variables(s, &variables);
+                            let full = resolve_path(&current_dir, &res);
+                            result.targets[target_idx].source_files.push(full);
+                        }
                     }
                 }
             }
@@ -771,14 +802,23 @@ pub fn parse_cmake_content_native(
                     let target_idx = get_or_create_target(target_name, "executable", &mut result.targets);
                     result.targets[target_idx].target_type = "executable".to_string();
 
-                    for s in &cmd.args[1..] {
-                        let upper = s.to_uppercase();
-                        if matches!(upper.as_str(), "WIN32" | "MACOSX_BUNDLE" | "EXCLUDE_FROM_ALL" | "ALIAS") {
-                            continue;
+                    let is_alias_or_imported = cmd.args[1..].iter().any(|arg| {
+                        let upper = arg.to_uppercase();
+                        upper == "ALIAS" || upper == "IMPORTED"
+                    });
+                    if !is_alias_or_imported {
+                        for s in &cmd.args[1..] {
+                            let upper = s.to_uppercase();
+                            if matches!(
+                                upper.as_str(),
+                                "WIN32" | "MACOSX_BUNDLE" | "EXCLUDE_FROM_ALL" | "ALIAS" | "IMPORTED" | "GLOBAL"
+                            ) {
+                                continue;
+                            }
+                            let res = resolve_variables(s, &variables);
+                            let full = resolve_path(&current_dir, &res);
+                            result.targets[target_idx].source_files.push(full);
                         }
-                        let res = resolve_variables(s, &variables);
-                        let full = resolve_path(&current_dir, &res);
-                        result.targets[target_idx].source_files.push(full);
                     }
                 }
             }
@@ -801,14 +841,36 @@ pub fn parse_cmake_content_native(
                     let target_idx = get_or_create_target(target_name, &target_type, &mut result.targets);
                     result.targets[target_idx].target_type = target_type;
 
-                    for s in &cmd.args[src_start..] {
-                        let upper = s.to_uppercase();
-                        if matches!(upper.as_str(), "EXCLUDE_FROM_ALL" | "ALIAS" | "UNKNOWN") {
-                            continue;
+                    let is_alias_or_imported = cmd.args[1..].iter().any(|arg| {
+                        let upper = arg.to_uppercase();
+                        upper == "ALIAS" || upper == "IMPORTED"
+                    });
+                    if is_alias_or_imported {
+                        if cmd.args[1..].iter().any(|arg| arg.to_uppercase() == "INTERFACE") {
+                            result.targets[target_idx].target_type = "interface".to_string();
                         }
-                        let res = resolve_variables(s, &variables);
-                        let full = resolve_path(&current_dir, &res);
-                        result.targets[target_idx].source_files.push(full);
+                    } else {
+                        for s in &cmd.args[src_start..] {
+                            let upper = s.to_uppercase();
+                            if matches!(
+                                upper.as_str(),
+                                "STATIC"
+                                    | "SHARED"
+                                    | "MODULE"
+                                    | "OBJECT"
+                                    | "INTERFACE"
+                                    | "UNKNOWN"
+                                    | "IMPORTED"
+                                    | "ALIAS"
+                                    | "GLOBAL"
+                                    | "EXCLUDE_FROM_ALL"
+                            ) {
+                                continue;
+                            }
+                            let res = resolve_variables(s, &variables);
+                            let full = resolve_path(&current_dir, &res);
+                            result.targets[target_idx].source_files.push(full);
+                        }
                     }
                 }
             }

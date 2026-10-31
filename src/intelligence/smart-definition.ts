@@ -119,12 +119,12 @@ export function findCounterpartFile(
   const normDir = dir.replace(/\\/g, '/');
   let swappedDir: string | null = null;
   if (isHeader) {
-    const replaced = normDir.replace(/\/include(\/|$)/i, '/src$1').replace(/\/inc(\/|$)/i, '/src$1');
+    const replaced = normDir.replace(/\/(?:include|inc)(?=\/|$)(?!.*\/(?:include|inc)(?=\/|$))/i, '/src');
     if (replaced !== normDir) {
       swappedDir = replaced;
     }
   } else {
-    const replaced = normDir.replace(/\/src(\/|$)/i, '/include$1').replace(/\/source(\/|$)/i, '/include$1');
+    const replaced = normDir.replace(/\/(?:src|source)(?=\/|$)(?!.*\/(?:src|source)(?=\/|$))/i, '/include');
     if (replaced !== normDir) {
       swappedDir = replaced;
     }

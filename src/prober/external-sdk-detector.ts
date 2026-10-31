@@ -522,9 +522,23 @@ export class ExternalSdkDetector {
 
     const collectQtIncludes = (incDir: string): string[] => {
       const includePaths = [incDir];
+      // Dynamically discover all installed Qt* submodule directories
+      try {
+        const entries = fs.readdirSync(incDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory() && entry.name.startsWith('Qt')) {
+            const subDir = path.join(incDir, entry.name);
+            if (!includePaths.includes(subDir)) {
+              includePaths.push(subDir);
+            }
+          }
+        }
+      } catch {
+        // Fallback to checking predefined qtModules
+      }
       for (const sub of qtModules) {
         const subDir = path.join(incDir, sub);
-        if (fs.existsSync(subDir)) {
+        if (fs.existsSync(subDir) && !includePaths.includes(subDir)) {
           includePaths.push(subDir);
         }
       }
@@ -552,6 +566,14 @@ export class ExternalSdkDetector {
           const incDir = path.join(candidate, 'include');
           if (fs.existsSync(incDir)) {
             const includePaths = collectQtIncludes(incDir);
+            const hasQtIndicators =
+              includePaths.length > 1 ||
+              fs.existsSync(path.join(incDir, 'qglobal.h')) ||
+              fs.existsSync(path.join(incDir, 'QtCore', 'qstring.h')) ||
+              fs.existsSync(path.join(incDir, 'qtcore-config.h'));
+            if (!hasQtIndicators) {
+              continue;
+            }
             const libDir = path.join(candidate, 'lib');
             return {
               name: 'Qt',
@@ -578,6 +600,8 @@ export class ExternalSdkDetector {
       '/usr/include/x86_64-linux-gnu/qt6',
       '/usr/include/aarch64-linux-gnu/qt6',
       '/usr/include/qt5',
+      '/usr/include/x86_64-linux-gnu/qt5',
+      '/usr/include/aarch64-linux-gnu/qt5',
       '/opt/homebrew/opt/qt',
       '/usr/local/opt/qt'
     ];

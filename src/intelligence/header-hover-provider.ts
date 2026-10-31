@@ -833,7 +833,7 @@ export function resolveLocalHeaderPath(
       }
 
       // 3. Walk up parent directories from docDir (up to 8 levels or workspace root boundary)
-      let currentDir = path.dirname(docDir);
+      let currentDir = docDir;
       let levels = 0;
       const wsFolder = vscode.workspace.getWorkspaceFolder ? vscode.workspace.getWorkspaceFolder(documentUri) : undefined;
       const wsRoot = wsFolder?.uri.fsPath;

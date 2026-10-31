@@ -1,5 +1,9 @@
 import * as vscode from 'vscode';
-import { parseIncludeLine, resolveLocalHeaderPath } from './header-hover-provider';
+import {
+  parseIncludeLine,
+  resolveLocalHeaderPath,
+  STANDARD_HEADER_CATALOG
+} from './header-hover-provider';
 
 /**
  * Provides clickable document links on #include directives to open header files directly.
@@ -25,6 +29,13 @@ export class CppIncludeDocumentLinkProvider implements vscode.DocumentLinkProvid
 
       const parsed = parseIncludeLine(text, i);
       if (!parsed) {
+        continue;
+      }
+
+      if (
+        parsed.isStandard &&
+        Object.prototype.hasOwnProperty.call(STANDARD_HEADER_CATALOG, parsed.headerName.toLowerCase())
+      ) {
         continue;
       }
 

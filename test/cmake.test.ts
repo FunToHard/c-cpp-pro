@@ -150,6 +150,42 @@ describe('CMake Static Include Extraction & IntelliSense Integration', () => {
       assert.ok(mainTarget.compileDefinitions.includes('HAS_STORAGE=1'), 'main should transitively inherit HAS_STORAGE=1');
     });
 
+    it('should not add ALIAS, IMPORTED, or non-source keywords as sources', () => {
+      const cmakeLists = path.join(tempDir, 'CMakeLists.txt');
+      const content = `
+        cmake_minimum_required(VERSION 3.24)
+        project(KeywordTest CXX)
+
+        add_library(real_lib STATIC real.cpp)
+        add_library(my_alias ALIAS real_lib)
+        add_library(ext_lib SHARED IMPORTED GLOBAL)
+        add_executable(app WIN32 MACOSX_BUNDLE main.cpp)
+        add_executable(app_alias ALIAS app)
+      `;
+
+      fs.writeFileSync(cmakeLists, content, 'utf8');
+
+      const parsed = CMakeParser.parseWorkspace(tempDir);
+      assert.ok(parsed);
+
+      const aliasLib = parsed.targets.find((t) => t.name === 'my_alias');
+      assert.ok(aliasLib);
+      assert.strictEqual(aliasLib.sourceFiles.length, 0);
+
+      const extLib = parsed.targets.find((t) => t.name === 'ext_lib');
+      assert.ok(extLib);
+      assert.strictEqual(extLib.sourceFiles.length, 0);
+
+      const app = parsed.targets.find((t) => t.name === 'app');
+      assert.ok(app);
+      assert.strictEqual(app.sourceFiles.length, 1);
+      assert.ok(app.sourceFiles[0].endsWith('main.cpp'));
+
+      const appAlias = parsed.targets.find((t) => t.name === 'app_alias');
+      assert.ok(appAlias);
+      assert.strictEqual(appAlias.sourceFiles.length, 0);
+    });
+
     it('should recursively parse subdirectories via add_subdirectory', () => {
       const rootCMake = path.join(tempDir, 'CMakeLists.txt');
       fs.writeFileSync(
