@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export interface ExternalSdkInfo {
-  name: 'Vulkan' | 'raylib' | 'CUDA' | 'Boost' | 'SDL';
+  name: 'Vulkan' | 'raylib' | 'CUDA' | 'Boost' | 'SDL' | 'Qt';
   version?: string;
   rootPath: string;
   includePaths: string[];
@@ -500,6 +500,162 @@ export class ExternalSdkDetector {
   }
 
   /**
+   * Discovers Qt SDK installation via QTDIR, Qt6_DIR, Qt5_DIR, or standard installation paths.
+   */
+  public static detectQt(options: ExternalSdkDetectorOptions = {}): ExternalSdkInfo | null {
+    const env = options.env ?? process.env;
+    const allowFsScan = options.allowFsScan ?? true;
+
+    const qtModules = [
+      'QtCore',
+      'QtGui',
+      'QtWidgets',
+      'QtTest',
+      'QtNetwork',
+      'QtSql',
+      'QtSvg',
+      'QtQml',
+      'QtQuick',
+      'QtConcurrent',
+      'QtXml'
+    ];
+
+    const collectQtIncludes = (incDir: string): string[] => {
+      const includePaths = [incDir];
+      for (const sub of qtModules) {
+        const subDir = path.join(incDir, sub);
+        if (fs.existsSync(subDir)) {
+          includePaths.push(subDir);
+        }
+      }
+      return includePaths;
+    };
+
+    // 1. Environment variables: QTDIR, Qt6_DIR, Qt5_DIR, CMAKE_PREFIX_PATH
+    const rawEnv = [
+      env.QTDIR,
+      env.Qt6_DIR,
+      env.Qt5_DIR,
+      ...(env.CMAKE_PREFIX_PATH ? env.CMAKE_PREFIX_PATH.split(path.delimiter) : [])
+    ];
+    const envCandidates = rawEnv.filter((p): p is string => Boolean(p && p.trim()));
+
+    for (const envPath of envCandidates) {
+      try {
+        const checkPaths = [
+          envPath,
+          path.resolve(envPath, '..'),
+          path.resolve(envPath, '../..'),
+          path.resolve(envPath, '../../..')
+        ];
+        for (const candidate of checkPaths) {
+          const incDir = path.join(candidate, 'include');
+          if (fs.existsSync(incDir)) {
+            const includePaths = collectQtIncludes(incDir);
+            const libDir = path.join(candidate, 'lib');
+            return {
+              name: 'Qt',
+              rootPath: candidate,
+              includePaths,
+              libraryPaths: fs.existsSync(libDir) ? [libDir] : undefined,
+              source: 'env'
+            };
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (!allowFsScan) return null;
+
+    // 2. Scan standard installation folders
+    const baseCandidates = [
+      'C:\\Qt',
+      'D:\\Qt',
+      'F:\\Apps\\Qt',
+      '/usr/include/qt6',
+      '/usr/include/x86_64-linux-gnu/qt6',
+      '/usr/include/aarch64-linux-gnu/qt6',
+      '/usr/include/qt5',
+      '/opt/homebrew/opt/qt',
+      '/usr/local/opt/qt'
+    ];
+
+    for (const base of baseCandidates) {
+      try {
+        if (!fs.existsSync(base)) continue;
+
+        // If base is direct include directory
+        if (base.includes('include')) {
+          const includePaths = collectQtIncludes(base);
+          return {
+            name: 'Qt',
+            rootPath: path.dirname(base),
+            includePaths,
+            source: 'filesystem'
+          };
+        }
+
+        // Direct include/ under base (e.g. Homebrew flat installation)
+        const directInc = path.join(base, 'include');
+        if (fs.existsSync(directInc)) {
+          const includePaths = collectQtIncludes(directInc);
+          const libDir = path.join(base, 'lib');
+          return {
+            name: 'Qt',
+            rootPath: base,
+            includePaths,
+            libraryPaths: fs.existsSync(libDir) ? [libDir] : undefined,
+            source: 'filesystem'
+          };
+        }
+
+        // Base is a Qt installation directory with version folders
+        const entries = fs.readdirSync(base, { withFileTypes: true });
+        const versionDirs = entries
+          .filter((e) => e.isDirectory() && /^\d+(\.\d+)+$/.test(e.name))
+          .map((e) => e.name)
+          .sort(compareSemverDesc);
+
+        for (const vDir of versionDirs) {
+          const vPath = path.join(base, vDir);
+          const toolchains = fs.readdirSync(vPath, { withFileTypes: true });
+          const preferredTc = toolchains
+            .filter((t) => t.isDirectory())
+            .map((t) => t.name)
+            .sort((a, b) => {
+              if (a.includes('msvc') && !b.includes('msvc')) return -1;
+              if (!a.includes('msvc') && b.includes('msvc')) return 1;
+              return 0;
+            });
+
+          for (const tc of preferredTc) {
+            const tcPath = path.join(vPath, tc);
+            const incDir = path.join(tcPath, 'include');
+            if (fs.existsSync(incDir)) {
+              const includePaths = collectQtIncludes(incDir);
+              const libDir = path.join(tcPath, 'lib');
+              return {
+                name: 'Qt',
+                version: vDir,
+                rootPath: tcPath,
+                includePaths,
+                libraryPaths: fs.existsSync(libDir) ? [libDir] : undefined,
+                source: 'filesystem'
+              };
+            }
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Detects all supported external SDKs and returns their metadata.
    */
   public static detectAll(options: ExternalSdkDetectorOptions = {}): ExternalSdkInfo[] {
@@ -508,7 +664,8 @@ export class ExternalSdkDetector {
       () => ExternalSdkDetector.detectRaylib(options),
       () => ExternalSdkDetector.detectCuda(options),
       () => ExternalSdkDetector.detectBoost(options),
-      () => ExternalSdkDetector.detectSdl(options)
+      () => ExternalSdkDetector.detectSdl(options),
+      () => ExternalSdkDetector.detectQt(options)
     ];
 
     const results: ExternalSdkInfo[] = [];
@@ -602,6 +759,14 @@ export class ExternalSdkDetector {
         /#\s*include\s*[<"](?:SDL2\/|SDL3\/|SDL\.h)/i,
         /find_package\s*\(\s*SDL[23]?/i,
         /"sdl[23]?"/i
+      ],
+      Qt: [
+        /#\s*include\s*[<"]Q[A-Z]/,
+        /#\s*include\s*[<"]Qt[A-Za-z]+\//i,
+        /find_package\s*\(\s*Qt[56]?/i,
+        /qt_add_executable/i,
+        /qt_add_resources/i,
+        /target_link_libraries\s*\(.*Qt[56]::/i
       ]
     };
 
@@ -622,7 +787,8 @@ export class ExternalSdkDetector {
       '.cache',
       'bin',
       'obj',
-      'target'
+      'target',
+      'playground'
     ]);
 
     const sourceExts = new Set([

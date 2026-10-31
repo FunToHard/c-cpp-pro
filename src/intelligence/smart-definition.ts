@@ -115,7 +115,30 @@ export function findCounterpartFile(
     }
   }
 
-  // 2. Check in conventional mirrored folders: src <-> include
+  // 2. Check in conventional mirrored folders: src <-> include (including nested subdirectories)
+  const normDir = dir.replace(/\\/g, '/');
+  let swappedDir: string | null = null;
+  if (isHeader) {
+    const replaced = normDir.replace(/\/include(\/|$)/i, '/src$1').replace(/\/inc(\/|$)/i, '/src$1');
+    if (replaced !== normDir) {
+      swappedDir = replaced;
+    }
+  } else {
+    const replaced = normDir.replace(/\/src(\/|$)/i, '/include$1').replace(/\/source(\/|$)/i, '/include$1');
+    if (replaced !== normDir) {
+      swappedDir = replaced;
+    }
+  }
+
+  if (swappedDir) {
+    for (const candidateExt of targetExtensions) {
+      const candidatePath = path.join(swappedDir, baseName + candidateExt);
+      if (fs.existsSync(candidatePath)) {
+        return candidatePath;
+      }
+    }
+  }
+
   const parts = dir.split(path.sep);
   const lastDir = parts[parts.length - 1];
 

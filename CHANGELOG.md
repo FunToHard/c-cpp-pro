@@ -5,6 +5,26 @@ All notable changes to the C/C++ Pro extension will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-10-31
+
+### Fixed
+
+- **Subfolder Header Include Resolution**:
+  - Resolved an issue where files inside subdirectories (e.g. `src/application/Editing.cpp`) failed to resolve includes referencing their own parent segment (e.g. `#include "application/Editing.h"`).
+  - Enhanced local header path resolution with redundant folder segment stripping and bounded upward workspace traversal.
+  - Added native F12 definition provider fallback and clickable document links for `#include` directives.
+
+- **CMake Transitive Target Linkage & Database Synthesis**:
+  - Implemented `target_link_libraries` dependency extraction in both TypeScript and Rust native parsing engines.
+  - Transitively propagates public include directories and preprocessor definitions across linked CMake targets.
+  - Fixed forward-reference placeholder target merging across `add_subdirectory`.
+  - Preserved target isolation in compilation database synthesis when global include directories are empty.
+
+- **External SDK Detection & Qt Support**:
+  - Added comprehensive Qt SDK detection supporting `QTDIR`, `Qt6_DIR`, `Qt5_DIR`, `CMAKE_PREFIX_PATH`, Windows standard locations, Linux multiarch, and macOS Homebrew.
+  - Dynamically discovers Qt submodule include paths (`QtCore`, `QtGui`, `QtWidgets`, `QtNetwork`, `QtSql`, `QtSvg`, `QtQml`, `QtQuick`, `QtConcurrent`, `QtXml`).
+  - Added `'playground'` directory exclusion to enforce strict verification sandbox isolation.
+
 ## [0.4.0] - 2026-10-03
 
 ### Fixed

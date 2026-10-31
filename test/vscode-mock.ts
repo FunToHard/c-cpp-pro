@@ -34,7 +34,14 @@ export class Selection extends Range {
 }
 
 export class Location {
-  constructor(public uri: any, public range: Range) {}
+  public range: Range;
+  constructor(public uri: any, rangeOrPosition: Range | Position) {
+    if (rangeOrPosition instanceof Position) {
+      this.range = new Range(rangeOrPosition, rangeOrPosition);
+    } else {
+      this.range = rangeOrPosition;
+    }
+  }
 }
 
 export class CodeLens {

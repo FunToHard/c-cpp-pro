@@ -4,6 +4,7 @@ export interface CMakeTargetInfo {
   sourceFiles: string[];
   includeDirectories: string[];
   compileDefinitions: string[];
+  linkedTargets?: string[];
 }
 
 export interface CMakeProjectInfo {

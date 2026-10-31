@@ -6,7 +6,6 @@ import { DaemonManager } from './substrate/daemon-manager';
 import { CompilerDetector } from './prober/compiler-detector';
 import { SystemIncludeExtractor } from './prober/system-includes';
 import { FlagSynthesizer } from './prober/flag-synthesizer';
-import { ExternalSdkDetector } from './prober/external-sdk-detector';
 import {
   CppProDebugConfigurationProvider,
   CppProDebugAdapterDescriptorFactory
@@ -41,6 +40,7 @@ import { DisassemblyContentProvider } from './compiler/disassembly-view';
 import { HierarchyGraphManager } from './hierarchy/hierarchy-graph';
 import { CMakeManager } from './cmake/cmake-manager';
 import { registerAllCommands } from './commands/command-registry';
+import { CppIncludeDocumentLinkProvider } from './intelligence/document-links';
 
 let daemonManager: DaemonManager | null = null;
 let installer: ClangdInstaller | null = null;
@@ -225,18 +225,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       cppSelector,
       new CppEvaluatableExpressionProvider()
     ),
+    vscode.languages.registerDocumentLinkProvider(
+      cppSelector,
+      new CppIncludeDocumentLinkProvider()
+    ),
     inlayHintManager
   );
-
-  // Auto-discover external SDKs in workspace root if enabled
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (workspaceFolders && workspaceFolders.length > 0) {
-    const rootPath = workspaceFolders[0].uri.fsPath;
-    const config = vscode.workspace.getConfiguration('c-cpp-pro');
-    if (config.get<boolean>('discovery.detectExternalSdks', true)) {
-      ExternalSdkDetector.syncWorkspaceClangdConfig(rootPath);
-    }
-  }
 
   // Inspection & Analysis Managers: Memory Layout, Include Visualizer, Test Controller, Macro Evaluator, Disassembly View & Hierarchy Graph
   const memoryLayoutInspector = new MemoryLayoutInspector();

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeBridge } from '../native/native-bridge';
+import { resolveLocalHeaderPath } from '../intelligence/header-hover-provider';
 
 export interface IncludeNode {
   path: string;
@@ -125,26 +126,12 @@ export function buildIncludeTree(
   try {
     const content = fs.readFileSync(rootFile, 'utf-8');
     const direct = extractDirectIncludes(content, rootFile);
-    const rootDir = path.dirname(rootFile);
 
     for (const inc of direct) {
       let resolved: string | undefined;
 
       if (!inc.isSystem) {
-        // Look in current directory first
-        const candidate = path.resolve(rootDir, inc.includePath);
-        if (fs.existsSync(candidate)) {
-          resolved = candidate;
-        } else {
-          // Check workspace roots
-          for (const ws of workspaceFolders) {
-            const wsCand = path.resolve(ws, inc.includePath);
-            if (fs.existsSync(wsCand)) {
-              resolved = wsCand;
-              break;
-            }
-          }
-        }
+        resolved = resolveLocalHeaderPath(inc.includePath, vscode.Uri.file(rootFile), undefined, workspaceFolders);
       }
 
       const node: IncludeNode = {

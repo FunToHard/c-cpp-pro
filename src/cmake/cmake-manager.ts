@@ -92,7 +92,7 @@ export class CMakeManager implements vscode.Disposable {
    * without requiring any external cmake execution.
    */
   public async synthesizeCompilationDatabase(outputFilePath?: string): Promise<string | null> {
-    if (!this.activeProject) return null;
+    if (!this.activeProject || !this.activeProject.workspaceRoot) return null;
 
     const workspaceRoot = this.activeProject.workspaceRoot;
     const compiler = await this.detector.getPreferredCompiler();
@@ -105,8 +105,16 @@ export class CMakeManager implements vscode.Disposable {
     const cStdMsvc = (cStandard === 'c17' || cStandard === 'c11') ? cStandard : 'c11';
     const targetFile = outputFilePath || path.join(workspaceRoot, 'compile_commands.json');
 
-    const globalIncludes = this.activeProject.globalIncludeDirectories ?? this.activeProject.includeDirectories;
-    const globalDefs = this.activeProject.globalCompileDefinitions ?? this.activeProject.compileDefinitions;
+    const globalIncludes = [...(this.activeProject.globalIncludeDirectories ?? [])];
+    const globalDefs = [...(this.activeProject.globalCompileDefinitions ?? [])];
+
+    // Ensure common workspace directories (src, include, inc) are present if they exist on disk
+    for (const commonDir of ['src', 'include', 'inc']) {
+      const fullDir = path.join(workspaceRoot, commonDir).replace(/\\/g, '/');
+      if (fs.existsSync(fullDir) && !globalIncludes.includes(fullDir)) {
+        globalIncludes.push(fullDir);
+      }
+    }
 
     const entries: {
       directory: string;
